@@ -1,0 +1,21 @@
+##############################
+### Reinforcement learning ###
+### Pavlovian learning #######
+##############################
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Rescorla-Wagner Rule
+n_trials = 1000
+stim = np.ones(n_trials)
+r_half = np.concatenate((np.ones(int(n_trials/2)), np.zeros(int(n_trials/2))),axis=0)
+r_rand = np.random.rand(n_trials).round()
+w = np.zeros(len(stim))
+e = 0.01
+r = r_half
+for i,u in enumerate(stim[:-1]):
+    v = w[i]*u
+    delta = r[i]-v
+    w[i+1] = w[i] + e*delta*u
+
+plt.plot(w)
