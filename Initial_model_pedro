@@ -1,0 +1,95 @@
+#########################################
+## Reinforcement Learning CCCN Project ##
+#########################################
+import numpy as np
+from scipy.stats import norm
+import matplotlib.pyplot as plt
+import random
+
+params = {'stim' : np.linspace(-50,50,21), # sm in the model
+          'sigma_percept' : 10, # std of the gaussian used for perception
+          'sigma_belief' : 10, #std of the gaussian used for belief
+          'n_trials' : 1000, #number of trials
+          'n_choices' : 2,
+          'e' : .1, #learning rate
+          'R' : [1,2,0] # [reward left,reward right, no reward]
+}
+## Initiate the state-action variables as zeros ##
+Q    = np.zeros([len(params['stim']),params['n_choices']]) # state-action variable for each stimulus
+Q_a  = np.zeros([params['n_trials'],params['n_choices']+1]) #save [QL,QR,choice]
+D_m  = np.zeros(params['n_trials'])
+D_fb = np.zeros(params['n_trials'])
+Sm    = np.zeros(params['n_trials'])
+answers = np.zeros(params['n_trials'])
+
+## stimulus ##
+def stimulus(params):
+    sm = random.choice(params['stim']) #presented stimulus
+    sm_hat = np.random.normal(sm,params['sigma_percept'])
+    bel = norm.pdf(params['stim'],sm_hat,params['sigma_belief'])
+    bel = bel/sum(bel)
+    return sm,sm_hat,bel
+
+def net_Q(a,Q,bel):
+    if a == 'R':
+        netQ = sum(bel*Q[:,1])
+    elif a == 'L':
+        netQ = sum(bel*Q[:,0])
+    else:
+        print('Possible choices are R or L only')
+    return netQ
+
+for trial in range(params['n_trials']):
+    sm,sm_hat,bel = stimulus(params)
+    if sm > 0:
+        answer = 1
+    elif sm < 0:
+        answer = -1
+    else:
+        answer = random.choice([-1,1])
+
+    Vfc = .5*(net_Q('L',Q,np.ones(len(params['stim']))/len(params['stim'])) + net_Q('R',Q,np.ones(len(params['stim']))/len(params['stim'])))
+    QL = net_Q('L',Q,bel)
+    QR = net_Q('R',Q,bel)
+    Q_a[trial,:2] = [QL,QR]
+
+    if QL == QR:
+        choice = random.choice([-1,1])
+    else:
+        choice = np.where(Q_a[trial] == np.amax(Q_a[trial]))[0][0]*2-1 # have the choice be -1 or 1
+
+    delta_m = Q_a[trial,choice]-Vfc
+
+    if choice == answer:
+        reward = params['R'][int((choice+1)/2)]
+    else:
+        reward = params['R'][2]
+    delta_fb = reward - Q_a[trial,int((choice+1)/2)]
+    # update and save
+    Q[:,int((choice+1)/2)] = Q[:,int((choice+1)/2)] + params['e']*delta_fb*bel
+    Q_a[trial,2] = int((choice+1)/2)
+    D_m[trial]  = delta_m
+    D_fb[trial] = delta_fb
+    Sm[trial]   = sm
+    answers[trial] = answer
+# plot Q_a for choices right or left
+plt.figure()
+c = 1
+plt.plot(Q_a[Q_a[:,2]==c,c],'.')
+c = 0
+plt.plot(Q_a[Q_a[:,2]==c,c],'.')
+
+#plot delta_m
+plt.plot(D_m,'.')
+
+#plot delta_fb
+plt.plot(D_fb,'.')
+
+#Figure 1 of paper
+plt.figure()
+plt.plot(params['stim'][-11:],[np.mean(D_m[np.logical_and(answers == Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
+plt.plot(params['stim'][-11:],[np.mean(D_m[np.logical_and(answers != Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
+
+plt.figure()
+plt.plot(params['stim'][-11:],[np.mean(D_fb[np.logical_and(answers == Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
+plt.plot(params['stim'][-11:],[np.mean(D_fb[np.logical_and(answers != Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
