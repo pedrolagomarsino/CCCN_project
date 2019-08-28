@@ -1,0 +1,143 @@
+import numpy as np
+from scipy.stats import norm
+import matplotlib.pyplot as plt
+import random
+
+params = {'stim' : np.linspace(-50,50,21), # sm in the model
+          'sigma_percept' : 10, # std of the gaussian used for perception
+          'sigma_belief' : 10, #std of the gaussian used for belief
+          'n_trials' : 1000, #number of trials
+          'n_choices' : 2,
+          'e' : .1, #learning rate
+          'R' : [1,2,0], # [reward left,reward right, no reward]
+          'threshold': 1, # starting point in the threshold curve
+          'Tmax': 20 #maximun amount of time-steps per trial
+}
+
+## stimulus ##
+def stimulus(params,sm):
+    """sample an observation given a stimulus and build a belief as in Lak paper"""
+    sm_hat = np.random.normal(sm,params['sigma_percept'])
+    bel = norm.pdf(params['stim'],sm_hat,params['sigma_belief'])
+    bel = bel/sum(bel)
+    return sm_hat,bel
+
+def net_Q(a,Q,bel):
+    """calculate Q projection given a believe bel, an action a and a Q-table Q """
+    if a == 'R':
+        netQ = sum(bel*Q[:,1])
+    elif a == 'L':
+        netQ = sum(bel*Q[:,0])
+    else:
+        print('Possible choices are R or L only')
+    return netQ
+
+## Initiate the state-action variables as zeros ##
+Q    = np.zeros([len(params['stim']),params['n_choices']]) # state-action variable for each stimulus
+Q_a  = np.zeros([params['n_trials'],params['n_choices']+1]) # save [QL,QR,choice]
+QT   = np.zeros([params['Tmax'],params['n_choices'],params['n_trials']]) # Qtrial, the value of QR,QL in time and across trials
+D_m  = np.zeros(params['n_trials']) # stimulus prediction error
+D_fb = np.zeros(params['n_trials']) # feedback prediction error
+Sm    = np.zeros(params['n_trials']) # stimulus for each trial
+answers = np.zeros(params['n_trials']) # correct answers (L=-1 or R=1)
+Time_steps = np.linspace(0,params['Tmax']-1,params['Tmax'])
+dyn_th = np.log(-(Time_steps-(params['Tmax'])))*params['threshold']/(np.log(params['Tmax'])) # dinamic threshold in time
+#dyn_th = np.ones(params['Tmax'])*params['threshold'] #flat threshold
+#dyn_th[-1]=0
+plt.plot(dyn_th,'.')
+
+
+for trial in range(params['n_trials']):
+    sm = random.choice(params['stim']) #presented stimulus
+    Qtrial = np.zeros([params['Tmax'],2])
+    # correct answer given stimulus
+    if sm > 0:
+        answer = 1
+    elif sm < 0:
+        answer = -1
+    else:
+        answer = random.choice([-1,1])
+    # calculate State value befor stimulus presentation
+    Vfc = .5*(net_Q('L',Q,np.ones(len(params['stim']))/len(params['stim'])) + net_Q('R',Q,np.ones(len(params['stim']))/len(params['stim'])))
+    # after stimulus presentation enter the temporal loop
+    for t in range(params['Tmax']):
+        sm_hat,bel = stimulus(params,sm) #make an observation at each time step
+        QL = net_Q('L',Q,bel)
+        QR = net_Q('R',Q,bel)
+        Qtrial[t] = Qtrial[t-1]+np.array([QL,QR])/(t+1)  # integrate evidence, each step adds less info
+        if max(Qtrial[t])<dyn_th[t]:
+            continue
+        else:
+            if Qtrial[t,0] == Qtrial[t,1]:
+                choice = random.choice([-1,1])
+            else:
+                choice = np.where(Qtrial[t] == np.amax(Qtrial[t]))[0][0]*2-1 # have the choice be -1 or 1
+            break
+
+    QT[:,:,trial] = Qtrial
+    Q_a[trial,:2] = Qtrial[t]
+    delta_m = Q_a[trial,choice]-Vfc
+
+
+    if choice == answer:
+        reward = params['R'][int((choice+1)/2)]
+    else:
+        reward = params['R'][2]
+
+    delta_fb = reward - Q_a[trial,int((choice+1)/2)]
+    # update and save
+    Q[:,int((choice+1)/2)] = Q[:,int((choice+1)/2)] + params['e']*delta_fb*bel # I'm using the last belief, that could not be the best call
+    Q_a[trial,2] = int((choice+1)/2) # save binary choice
+    D_m[trial]  = delta_m
+    D_fb[trial] = delta_fb
+    Sm[trial]   = sm
+    answers[trial] = answer
+
+# The values of QR and QL converge to reward value
+plt.figure()
+c = 1
+plt.plot(Q_a[Q_a[:,2]==c,c],'.')
+c = 0
+plt.plot(Q_a[Q_a[:,2]==c,c],'.')
+
+# Competition between choices becomes faster with trials
+tt = 54
+#plt.plot(QT[:,0,tt])
+plt.plot(QT[:,0,tt])
+plt.plot(QT[:,1,tt])
+plt.plot(dyn_th)
+
+# Lak paper figure 1 plots
+plt.figure()
+plt.plot(params['stim'][-11:],[np.mean(D_m[np.logical_and(answers == Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
+plt.plot(params['stim'][-11:],[np.mean(D_m[np.logical_and(answers != Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
+
+plt.figure()
+plt.plot(params['stim'][-11:],[np.mean(D_fb[np.logical_and(answers == Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
+plt.plot(params['stim'][-11:],[np.mean(D_fb[np.logical_and(answers != Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
+
+# time of decision decreases with trials, and is lower for bigger rewards
+ttrials = np.linspace(0,params['n_trials']-1,params['n_trials'])
+t_des_r = [sum(QT[:,1,int(trial)]!=0) for trial in ttrials[Q_a[:,2]==1]]#range(params['n_trials']) ]
+t_des_l = [sum(QT[:,0,int(trial)]!=0) for trial in ttrials[Q_a[:,2]==0]]
+plt.plot(t_des_r,'.')
+plt.plot(t_des_l,'.')
+
+# Time to decision decreases with coherence and is lower for high rewards (result observed experimentally)
+ttrials = np.linspace(0,params['n_trials']-1,params['n_trials']).astype(int)
+tr_r = np.zeros(len(params['stim'][-11:]))
+for i,s in enumerate(params['stim'][-11:]):
+    tr_r[i] = np.mean([sum(QT[:,1,int(trial)]!=0) for trial in ttrials[np.array(Q_a[:,2]==1)*np.array(Sm==s)] ])
+tr_l = np.zeros(len(params['stim'][-11:]))
+for i,s in enumerate(params['stim'][:11]):
+    tr_l[i] = np.mean([sum(QT[:,0,int(trial)]!=0) for trial in ttrials[np.array(Q_a[:,2]==0)*np.array(Sm==s)] ])
+
+plt.plot(params['stim'][-11:],tr_r)
+plt.plot(abs(params['stim'][:11]),tr_l)
+
+#psicometric curve (amount of choices to the right) shifts depending on the reward size.
+# to see this result one should run the code, then change the bias in reward and run it again
+Choice_R_high = [sum(Q_a[ttrials[Sm==s],2])/len(ttrials[Sm==s]) for s in params['stim']]
+Choice_R_low = [sum(Q_a[ttrials[Sm==s],2])/len(ttrials[Sm==s]) for s in params['stim']]
+plt.plot(params['stim'],Choice_R_high,'.-')
+plt.plot(params['stim'],Choice_R_low,'.-')

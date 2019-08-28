@@ -1,0 +1,43 @@
+#########################################
+## Reinforcement Learning CCCN Project ##
+## temporal extention ###################
+#########################################
+import numpy as np
+from scipy.stats import norm
+import matplotlib.pyplot as plt
+import random
+
+params = {'stim' : [0,1], # sm in the model
+          'n_trials' : 1000, #number of trials
+          'n_choices' : 3,
+          'e' : .1, #learning rate
+          'R' : [20,-400,-1], # [reward correct,reward wrong, forward]
+          'high_prob': .8
+          }
+params['o'] = np.array([[params['high_prob'], 1-params['high_prob']],[1-params['high_prob'], params['high_prob']]])
+def build_stim(prob,Tmax):
+    stim = random.choice([0,1])
+    obs = np.random.rand(Tmax)
+    obs[obs < prob] = 1-stim
+    obs[np.array(obs>prob)*np.array(obs!=1)] = stim
+    return stim, obs
+
+# Initiate variables
+Tmax = 20
+Time_steps = np.linspace(0,Tmax,101)
+bel = np.zeros([Tmax,2])
+bel[0] = .5
+stim,obs = build_stim(params['o'][0,1],Tmax)
+i=0
+for i in range(Tmax-1):
+
+    if obs[i+1] == 1:
+        norm = bel[i,1]*params['o'][1,1]+(1-bel[i,1])*params['o'][1,0]
+        bel[i+1] = bel[i]*params['o'][1]/norm # here is the error
+    else:
+        norm = bel[i,0]*params['o'][0,0]+(1-bel[i,0])*params['o'][0,1]
+        bel[i+1] = bel[i]*params['o'][0]/norm
+    bel[i+1] = bel[i+1]/sum(bel[i+1])
+
+plt.plot(bel)
+plt.plot(obs,'o')
