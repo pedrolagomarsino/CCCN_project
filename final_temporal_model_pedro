@@ -12,7 +12,8 @@ params = {'stim' : np.linspace(-50,50,21), # sm in the model
           'R' : [1,1.2,0], # [reward left,reward right, no reward]
           'threshold': .8, # starting point in the threshold curve
           'Tmax': 100, #maximun amount of time-steps per trial
-          'tau_decay' : 5
+          'tau_decay' : 5,
+          'th_var' : .001
 }
 
 ## stimulus ##
@@ -46,7 +47,7 @@ Time_steps = np.linspace(0,params['Tmax']-1,params['Tmax'])
 dyn_th = np.ones(params['Tmax'])*params['threshold'] #flat threshold
 dyn_th[-1]=0
 plt.plot(dyn_th)
-
+trial= 0
 for trial in range(params['n_trials']):
     sm = random.choice(params['stim']) #presented stimulus
     Qtrial = np.zeros([params['Tmax'],2])
@@ -61,7 +62,7 @@ for trial in range(params['n_trials']):
     # calculate State value befor stimulus presentation
     Vfc = .5*(net_Q('L',Q,np.ones(len(params['stim']))/len(params['stim'])) + net_Q('R',Q,np.ones(len(params['stim']))/len(params['stim'])))
     # after stimulus presentation enter the temporal loop
-
+    p=0
     for t in range(params['Tmax']):
         sm_hat,bel = stimulus(params,sm) #make an observation at each time step
         if t==0:
@@ -75,6 +76,15 @@ for trial in range(params['n_trials']):
         #Qtrial[t] = Qtrial[t-1]+np.array([QL,QR])/(t+1)  # integrate evidence, each step adds less info
         #Qtrial[t] = Qtrial[t-1]*np.exp(-1/params['tau_decay'])+np.array([QL,QR])
         if max(Qtrial[t])<dyn_th[t]:
+            d_Q = np.linalg.norm(Qtrial[t]-Qtrial[t-1])
+            if d_Q<params['th_var']:
+                p += 1
+            if p>10:
+                if Qtrial[t,0] == Qtrial[t,1]:
+                    choice = random.choice([-1,1])
+                else:
+                    choice = np.where(Qtrial[t] == np.amax(Qtrial[t]))[0][0]*2-1 # have the choice be -1 or 1
+                break
             continue
         else:
             if Qtrial[t,0] == Qtrial[t,1]:
@@ -82,6 +92,7 @@ for trial in range(params['n_trials']):
             else:
                 choice = np.where(Qtrial[t] == np.amax(Qtrial[t]))[0][0]*2-1 # have the choice be -1 or 1
             break
+
 
     QT[:,:,trial] = Qtrial
     Q_a[trial,:2] = Qtrial[t]
@@ -117,7 +128,7 @@ plt.plot(params['stim'],bel_cumulative[-1])
 #plt.plot(params['stim'],bel_cumulative[11])
 
 # Competition between choices becomes faster with trials
-tt = 202
+tt = 100
 plt.figure()
 plt.plot(QT[:,0,tt], color='b')
 plt.plot(QT[:,1,tt],color = 'r')
@@ -159,6 +170,7 @@ plt.plot(params['stim'][-11:],tr_r)
 plt.plot(abs(params['stim'][:11]),tr_l)
 plt.xlabel('coherence')
 plt.ylabel('mean decision time')
+plt.legend(['R','L'])
 #psicometric curve (amount of choices to the right) shifts depending on the reward size.
 # to see this result one should run the code, then change the bias in reward and run it again
 Choice_R_high = [sum(Q_a[ttrials[Sm==s],2])/len(ttrials[Sm==s]) for s in params['stim']]
