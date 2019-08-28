@@ -9,9 +9,10 @@ params = {'stim' : np.linspace(-50,50,21), # sm in the model
           'n_trials' : 1000, #number of trials
           'n_choices' : 2,
           'e' : .1, #learning rate
-          'R' : [1,2,0], # [reward left,reward right, no reward]
-          'threshold': 1, # starting point in the threshold curve
-          'Tmax': 20 #maximun amount of time-steps per trial
+          'R' : [1,1.2,0], # [reward left,reward right, no reward]
+          'threshold': .8, # starting point in the threshold curve
+          'Tmax': 100, #maximun amount of time-steps per trial
+          'tau_decay' : 5
 }
 
 ## stimulus ##
@@ -41,15 +42,15 @@ D_fb = np.zeros(params['n_trials']) # feedback prediction error
 Sm    = np.zeros(params['n_trials']) # stimulus for each trial
 answers = np.zeros(params['n_trials']) # correct answers (L=-1 or R=1)
 Time_steps = np.linspace(0,params['Tmax']-1,params['Tmax'])
-dyn_th = np.log(-(Time_steps-(params['Tmax'])))*params['threshold']/(np.log(params['Tmax'])) # dinamic threshold in time
-#dyn_th = np.ones(params['Tmax'])*params['threshold'] #flat threshold
-#dyn_th[-1]=0
-plt.plot(dyn_th,'.')
-
+#dyn_th = np.log(-(Time_steps-(params['Tmax'])))*params['threshold']/(np.log(params['Tmax'])) # dinamic threshold in time
+dyn_th = np.ones(params['Tmax'])*params['threshold'] #flat threshold
+dyn_th[-1]=0
+plt.plot(dyn_th)
 
 for trial in range(params['n_trials']):
     sm = random.choice(params['stim']) #presented stimulus
     Qtrial = np.zeros([params['Tmax'],2])
+    bel_cumulative = np.zeros([params['Tmax'],len(params['stim'])])
     # correct answer given stimulus
     if sm > 0:
         answer = 1
@@ -60,11 +61,19 @@ for trial in range(params['n_trials']):
     # calculate State value befor stimulus presentation
     Vfc = .5*(net_Q('L',Q,np.ones(len(params['stim']))/len(params['stim'])) + net_Q('R',Q,np.ones(len(params['stim']))/len(params['stim'])))
     # after stimulus presentation enter the temporal loop
+
     for t in range(params['Tmax']):
         sm_hat,bel = stimulus(params,sm) #make an observation at each time step
-        QL = net_Q('L',Q,bel)
-        QR = net_Q('R',Q,bel)
-        Qtrial[t] = Qtrial[t-1]+np.array([QL,QR])/(t+1)  # integrate evidence, each step adds less info
+        if t==0:
+            bel_cumulative[t] = bel
+        else:
+            bel_cumulative[t] = bel_cumulative[t-1]*np.exp(-1/params['tau_decay'])*bel
+        bel_cumulative[t] = bel_cumulative[t]/sum(bel_cumulative[t])
+        QL = net_Q('L',Q,bel_cumulative[t])
+        QR = net_Q('R',Q,bel_cumulative[t])
+        Qtrial[t] = np.array([QL,QR])
+        #Qtrial[t] = Qtrial[t-1]+np.array([QL,QR])/(t+1)  # integrate evidence, each step adds less info
+        #Qtrial[t] = Qtrial[t-1]*np.exp(-1/params['tau_decay'])+np.array([QL,QR])
         if max(Qtrial[t])<dyn_th[t]:
             continue
         else:
@@ -77,7 +86,6 @@ for trial in range(params['n_trials']):
     QT[:,:,trial] = Qtrial
     Q_a[trial,:2] = Qtrial[t]
     delta_m = Q_a[trial,choice]-Vfc
-
 
     if choice == answer:
         reward = params['R'][int((choice+1)/2)]
@@ -99,30 +107,45 @@ c = 1
 plt.plot(Q_a[Q_a[:,2]==c,c],'.')
 c = 0
 plt.plot(Q_a[Q_a[:,2]==c,c],'.')
+plt.xlabel('trials')
+plt.ylabel('Q_action')
+
+sm
+plt.figure()
+plt.plot(params['stim'],bel_cumulative.transpose())
+plt.plot(params['stim'],bel_cumulative[-1])
+#plt.plot(params['stim'],bel_cumulative[11])
 
 # Competition between choices becomes faster with trials
-tt = 54
-#plt.plot(QT[:,0,tt])
-plt.plot(QT[:,0,tt])
-plt.plot(QT[:,1,tt])
+tt = 202
+plt.figure()
+plt.plot(QT[:,0,tt], color='b')
+plt.plot(QT[:,1,tt],color = 'r')
 plt.plot(dyn_th)
-
+plt.legend(['L','R','Th'])
+plt.xlabel('time')
+plt.ylabel('intra trial Q')
 # Lak paper figure 1 plots
 plt.figure()
 plt.plot(params['stim'][-11:],[np.mean(D_m[np.logical_and(answers == Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
 plt.plot(params['stim'][-11:],[np.mean(D_m[np.logical_and(answers != Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
+plt.ylabel('delta_m')
+plt.xlabel('coherence')
 
 plt.figure()
 plt.plot(params['stim'][-11:],[np.mean(D_fb[np.logical_and(answers == Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
 plt.plot(params['stim'][-11:],[np.mean(D_fb[np.logical_and(answers != Q_a[:,2], abs(Sm)==s)]) for s in params['stim'][-11:]])
-
+plt.xlabel('coherence')
+plt.ylabel('delfa_fb')
 # time of decision decreases with trials, and is lower for bigger rewards
-ttrials = np.linspace(0,params['n_trials']-1,params['n_trials'])
+ttrials = np.linspace(0,params['n_trials']-1,params['n_trials']).astype(int)
 t_des_r = [sum(QT[:,1,int(trial)]!=0) for trial in ttrials[Q_a[:,2]==1]]#range(params['n_trials']) ]
 t_des_l = [sum(QT[:,0,int(trial)]!=0) for trial in ttrials[Q_a[:,2]==0]]
+plt.figure()
 plt.plot(t_des_r,'.')
 plt.plot(t_des_l,'.')
-
+plt.xlabel('trial')
+plt.ylabel('desition time')
 # Time to decision decreases with coherence and is lower for high rewards (result observed experimentally)
 ttrials = np.linspace(0,params['n_trials']-1,params['n_trials']).astype(int)
 tr_r = np.zeros(len(params['stim'][-11:]))
@@ -131,13 +154,17 @@ for i,s in enumerate(params['stim'][-11:]):
 tr_l = np.zeros(len(params['stim'][-11:]))
 for i,s in enumerate(params['stim'][:11]):
     tr_l[i] = np.mean([sum(QT[:,0,int(trial)]!=0) for trial in ttrials[np.array(Q_a[:,2]==0)*np.array(Sm==s)] ])
-
+plt.figure()
 plt.plot(params['stim'][-11:],tr_r)
 plt.plot(abs(params['stim'][:11]),tr_l)
-
+plt.xlabel('coherence')
+plt.ylabel('mean decision time')
 #psicometric curve (amount of choices to the right) shifts depending on the reward size.
 # to see this result one should run the code, then change the bias in reward and run it again
 Choice_R_high = [sum(Q_a[ttrials[Sm==s],2])/len(ttrials[Sm==s]) for s in params['stim']]
-Choice_R_low = [sum(Q_a[ttrials[Sm==s],2])/len(ttrials[Sm==s]) for s in params['stim']]
+#Choice_R_low = [sum(Q_a[ttrials[Sm==s],2])/len(ttrials[Sm==s]) for s in params['stim']]
+plt.figure()
 plt.plot(params['stim'],Choice_R_high,'.-')
-plt.plot(params['stim'],Choice_R_low,'.-')
+plt.xlabel('coherence')
+plt.ylabel('Right choices')
+#plt.plot(params['stim'],Choice_R_low,'.-')
