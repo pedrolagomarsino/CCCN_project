@@ -3,29 +3,31 @@ from scipy.stats import norm
 import matplotlib.pyplot as plt
 import random
 
-params = {'stim' : np.linspace(-50,50,21), # sm in the model
+params = {'stim' : np.linspace(-50,50,21), # list of possible coherences/stimulus (sm in the model)
           'sigma_percept' : 10, # std of the gaussian used for perception
           'sigma_belief' : 10, #std of the gaussian used for belief
-          'n_trials' : 1000, #number of trials
+          'n_trials' : 1000, # number of trials
           'n_choices' : 2,
           'e' : .1, #learning rate
           'R' : [1,1.2,0], # [reward left,reward right, no reward]
-          'threshold': .8, # starting point in the threshold curve
-          'Tmax': 100, #maximun amount of time-steps per trial
-          'tau_decay' : 5,
-          'th_var' : .001
+          'threshold': .8, # decision threshold
+          'dynamic_threshold': False,
+          'Tmax': 100, # maximun amount of time-steps per trial
+          'tau_decay' : 5, # decay time for the belief
+          'th_var' : .001, # threshold for the convergence of Q
+          'beta' : 10 # exploration parameter
 }
 
-## stimulus ##
+## utils ##
 def stimulus(params,sm):
-    """sample an observation given a stimulus and build a belief as in Lak paper"""
+    """sample an observation (sm_hat) given a stimulus (sm) and build a belief (bel) as in Lak paper"""
     sm_hat = np.random.normal(sm,params['sigma_percept'])
     bel = norm.pdf(params['stim'],sm_hat,params['sigma_belief'])
     bel = bel/sum(bel)
     return sm_hat,bel
 
 def net_Q(a,Q,bel):
-    """calculate Q projection given a believe bel, an action a and a Q-table Q """
+    """calculate net value of an action given a believe (bel), an action (a) and a Q-table (Q) """
     if a == 'R':
         netQ = sum(bel*Q[:,1])
     elif a == 'L':
@@ -34,20 +36,24 @@ def net_Q(a,Q,bel):
         print('Possible choices are R or L only')
     return netQ
 
-## Initiate the state-action variables as zeros ##
-Q    = np.zeros([len(params['stim']),params['n_choices']]) # state-action variable for each stimulus
+## Initiate variables ##
+Q    = np.zeros([len(params['stim']),params['n_choices']]) # state-action variable for each stimulus and action (expected cumulative reward)
 Q_a  = np.zeros([params['n_trials'],params['n_choices']+1]) # save [QL,QR,choice]
 QT   = np.zeros([params['Tmax'],params['n_choices'],params['n_trials']]) # Qtrial, the value of QR,QL in time and across trials
 D_m  = np.zeros(params['n_trials']) # stimulus prediction error
 D_fb = np.zeros(params['n_trials']) # feedback prediction error
 Sm    = np.zeros(params['n_trials']) # stimulus for each trial
-answers = np.zeros(params['n_trials']) # correct answers (L=-1 or R=1)
+answers = np.zeros(params['n_trials']) # correct answers for each trial (L=-1 or R=1)
 Time_steps = np.linspace(0,params['Tmax']-1,params['Tmax'])
-#dyn_th = np.log(-(Time_steps-(params['Tmax'])))*params['threshold']/(np.log(params['Tmax'])) # dinamic threshold in time
-dyn_th = np.ones(params['Tmax'])*params['threshold'] #flat threshold
-dyn_th[-1]=0
+if params['dynamic_threshold']:
+    dyn_th = np.log(-(Time_steps-(params['Tmax'])))*params['threshold']/(np.log(params['Tmax'])) # dinamic threshold in time
+else:
+    dyn_th = np.ones(params['Tmax'])*params['threshold'] #flat threshold
+    dyn_th[-1]=0
 plt.plot(dyn_th)
-trial= 0
+
+trial = 0
+#Initiate experiment#
 for trial in range(params['n_trials']):
     sm = random.choice(params['stim']) #presented stimulus
     Qtrial = np.zeros([params['Tmax'],2])
@@ -65,17 +71,24 @@ for trial in range(params['n_trials']):
     p=0
     for t in range(params['Tmax']):
         sm_hat,bel = stimulus(params,sm) #make an observation at each time step
+
+        # belief gets refine with every observation (belief is the product of all my previous beliefs)
         if t==0:
             bel_cumulative[t] = bel
         else:
             bel_cumulative[t] = bel_cumulative[t-1]*np.exp(-1/params['tau_decay'])*bel
         bel_cumulative[t] = bel_cumulative[t]/sum(bel_cumulative[t])
+
+        # calculate net value of action
         QL = net_Q('L',Q,bel_cumulative[t])
         QR = net_Q('R',Q,bel_cumulative[t])
         Qtrial[t] = np.array([QL,QR])
         #Qtrial[t] = Qtrial[t-1]+np.array([QL,QR])/(t+1)  # integrate evidence, each step adds less info
-        #Qtrial[t] = Qtrial[t-1]*np.exp(-1/params['tau_decay'])+np.array([QL,QR])
+        #Qtrial[t] = Qtrial[t-1]*np.exp(-1/params['tau_decay'])+np.array([QL,QR]) #
+
+        # make a choice or move forward
         if max(Qtrial[t])<dyn_th[t]:
+            # if QL,QR converged make a choice, otherwise continue
             d_Q = np.linalg.norm(Qtrial[t]-Qtrial[t-1])
             if d_Q<params['th_var']:
                 p += 1
@@ -83,34 +96,37 @@ for trial in range(params['n_trials']):
                 if Qtrial[t,0] == Qtrial[t,1]:
                     choice = random.choice([-1,1])
                 else:
-                    choice = np.where(Qtrial[t] == np.amax(Qtrial[t]))[0][0]*2-1 # have the choice be -1 or 1
+                    prob_L = 1/(1+np.exp(params['beta']*(Qtrial[t,1]-Qtrial[t,0])))
+                    choice = np.array([1 if x>prob_L else 0 for x in np.random.rand(1)])*2-1
+                    #choice = np.where(Qtrial[t] == np.amax(Qtrial[t]))[0][0]*2-1 # greedy choice (max)
                 break
             continue
         else:
             if Qtrial[t,0] == Qtrial[t,1]:
                 choice = random.choice([-1,1])
             else:
-                choice = np.where(Qtrial[t] == np.amax(Qtrial[t]))[0][0]*2-1 # have the choice be -1 or 1
+                prob_L = 1/(1+np.exp(params['beta']*(Qtrial[t,1]-Qtrial[t,0])))
+                choice = np.array([1 if x>prob_L else 0 for x in np.random.rand(1)])*2-1
+                #choice = np.where(Qtrial[t] == np.amax(Qtrial[t]))[0][0]*2-1 # greedy choice (max)
             break
 
-
-    QT[:,:,trial] = Qtrial
-    Q_a[trial,:2] = Qtrial[t]
-    delta_m = Q_a[trial,choice]-Vfc
-
+    # calculate reward given choice
     if choice == answer:
         reward = params['R'][int((choice+1)/2)]
     else:
         reward = params['R'][2]
 
-    delta_fb = reward - Q_a[trial,int((choice+1)/2)]
-    # update and save
-    Q[:,int((choice+1)/2)] = Q[:,int((choice+1)/2)] + params['e']*delta_fb*bel # I'm using the last belief, that could not be the best call
-    Q_a[trial,2] = int((choice+1)/2) # save binary choice
-    D_m[trial]  = delta_m
-    D_fb[trial] = delta_fb
-    Sm[trial]   = sm
+    # store variables for each trial
+    Sm[trial]      = sm
     answers[trial] = answer
+    QT[:,:,trial]  = Qtrial
+    Q_a[trial,:2]  = Qtrial[t]
+    Q_a[trial,2]   = int((choice+1)/2) # save binary choice
+    delta_m        = Q_a[trial,choice]-Vfc
+    D_m[trial]     = delta_m
+    delta_fb       = reward - Q_a[trial,int((choice+1)/2)]
+    D_fb[trial]    = delta_fb
+    Q[:,int((choice+1)/2)] = Q[:,int((choice+1)/2)] + params['e']*delta_fb*bel_cumulative[t]# use the final belief to update Q
 
 # The values of QR and QL converge to reward value
 plt.figure()
@@ -121,14 +137,14 @@ plt.plot(Q_a[Q_a[:,2]==c,c],'.')
 plt.xlabel('trials')
 plt.ylabel('Q_action')
 
-sm
+
 plt.figure()
 plt.plot(params['stim'],bel_cumulative.transpose())
 plt.plot(params['stim'],bel_cumulative[-1])
 #plt.plot(params['stim'],bel_cumulative[11])
 
 # Competition between choices becomes faster with trials
-tt = 100
+tt = 300
 plt.figure()
 plt.plot(QT[:,0,tt], color='b')
 plt.plot(QT[:,1,tt],color = 'r')
@@ -173,7 +189,8 @@ plt.ylabel('mean decision time')
 plt.legend(['R','L'])
 #psicometric curve (amount of choices to the right) shifts depending on the reward size.
 # to see this result one should run the code, then change the bias in reward and run it again
-Choice_R_high = [sum(Q_a[ttrials[Sm==s],2])/len(ttrials[Sm==s]) for s in params['stim']]
+ttrials = np.linspace(500,params['n_trials']-1,params['n_trials']-500).astype(int)
+Choice_R_high = [sum(Q_a[ttrials[Sm[500:]==s],2])/len(ttrials[Sm[500:]==s]) for s in params['stim']]
 #Choice_R_low = [sum(Q_a[ttrials[Sm==s],2])/len(ttrials[Sm==s]) for s in params['stim']]
 plt.figure()
 plt.plot(params['stim'],Choice_R_high,'.-')
